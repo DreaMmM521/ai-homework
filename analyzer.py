@@ -252,55 +252,56 @@ class ActivationFunctionAnalyzer:
         
         return layer_analysis
     
-    def  perform_statistical_tests(self, results_dict: Dict) -> Dict:
+    def perform_statistical_tests(self, results_dict: Dict) -> Dict:
         """执行统计检验"""
         statistical_tests = {}
-    
-    # 准备准确率数据
+        
+        # 准备准确率数据
         accuracy_data = {}
         for act_name, result in results_dict.items():
             accuracy_data[act_name] = result['history']['val_acc']
-    
-    # 对每组激活函数进行t检验
+        
+        # 对每组激活函数进行t检验
         act_names = list(accuracy_data.keys())
-    
+        
         for i in range(len(act_names)):
             for j in range(i + 1, len(act_names)):
                 act1 = act_names[i]
                 act2 = act_names[j]
-            
+                
                 data1 = accuracy_data[act1]
                 data2 = accuracy_data[act2]
-            
-            # 确保数据长度相同
+                
+                # 确保数据长度相同
                 min_len = min(len(data1), len(data2))
                 data1_trunc = data1[:min_len]
                 data2_trunc = data2[:min_len]
-            
-            # t检验
+                
+                # t检验
                 t_stat, p_value = stats.ttest_ind(data1_trunc, data2_trunc)
-            
-            # Mann-Whitney U检验（非参数）
+                
+                # Mann-Whitney U检验（非参数）
                 u_stat, u_p_value = stats.mannwhitneyu(data1_trunc, data2_trunc)
-            
+                
                 key = f"{act1}_vs_{act2}"
                 statistical_tests[key] = {
                     't_test': {
-                    't_statistic': float(t_stat) if hasattr(t_stat, 'item') else t_stat,
-                    'p_value': float(p_value) if hasattr(p_value, 'item') else p_value,
-                    'significant': bool(p_value < 0.05),  # 显式转换为Python bool
-                    'effect_size': float(abs(t_stat) / np.sqrt(len(data1_trunc) + len(data2_trunc) - 2)) if hasattr(t_stat, 'item') else abs(t_stat) / np.sqrt(len(data1_trunc) + len(data2_trunc) - 2)
-                },
-                'mann_whitney': {
-                    'u_statistic': float(u_stat) if hasattr(u_stat, 'item') else u_stat,
-                    'p_value': float(u_p_value) if hasattr(u_p_value, 'item') else u_p_value,
-                    'significant': bool(u_p_value < 0.05)  # 显式转换为Python bool
-                },
-                'mean_difference': float(np.mean(data1_trunc) - np.mean(data2_trunc)) if hasattr(np.mean(data1_trunc), 'item') else np.mean(data1_trunc) - np.mean(data2_trunc),
-                'relative_improvement': float((np.mean(data1_trunc) - np.mean(data2_trunc)) / np.mean(data2_trunc) * 100) if hasattr(np.mean(data1_trunc), 'item') else (np.mean(data1_trunc) - np.mean(data2_trunc)) / np.mean(data2_trunc) * 100
-            }
+                        't_statistic': t_stat,
+                        'p_value': p_value,
+                        'significant': p_value < 0.05,
+                        'effect_size': abs(t_stat) / np.sqrt(len(data1_trunc) + len(data2_trunc) - 2)
+                    },
+                    'mann_whitney': {
+                        'u_statistic': u_stat,
+                        'p_value': u_p_value,
+                        'significant': u_p_value < 0.05
+                    },
+                    'mean_difference': np.mean(data1_trunc) - np.mean(data2_trunc),
+                    'relative_improvement': (np.mean(data1_trunc) - np.mean(data2_trunc)) / np.mean(data2_trunc) * 100
+                }
+        
+        return statistical_tests
     
-            return statistical_tests
     def generate_comprehensive_analysis(self, results_dict: Dict, llm_predictions: Dict) -> Dict:
         """生成综合分析报告"""
         analysis = {
@@ -521,57 +522,34 @@ class ActivationFunctionAnalyzer:
         if filename is None:
             timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
             filename = f"comprehensive_analysis_{timestamp}.json"
-    
+        
         Path(self.config.RESULT_SAVE_DIR).mkdir(exist_ok=True)
-    
-    # 递归转换所有类型
-        def convert_all_types(obj):
-            if isinstance(obj, dict):
-                return {k: convert_all_types(v) for k, v in obj.items()}
-            elif isinstance(obj, list):
-                return [convert_all_types(v) for v in obj]
-            elif isinstance(obj, tuple):
-                return tuple(convert_all_types(v) for v in obj)
-            elif isinstance(obj, (np.integer, np.int64, np.int32, np.int16, np.int8)):
+        
+        # 转换numpy类型以便JSON序列化
+        def convert_numpy_types(obj):
+            if isinstance(obj, np.integer):
                 return int(obj)
-            elif isinstance(obj, (np.floating, np.float64, np.float32, np.float16)):
+            elif isinstance(obj, np.floating):
                 return float(obj)
             elif isinstance(obj, np.ndarray):
                 return obj.tolist()
-            elif isinstance(obj, np.bool_):
-                return bool(obj)
-            elif isinstance(obj, pd.Timestamp):
-                return str(obj)
-            elif isinstance(obj, bool):  # 普通bool类型，确保它是Python bool
-                return obj
-            elif hasattr(obj, 'dtype') and obj.dtype == bool:  # numpy布尔数组
-                return obj.tolist()
+            elif isinstance(obj, dict):
+                return {k: convert_numpy_types(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [convert_numpy_types(item) for item in obj]
             else:
                 return obj
-    
-        analysis_converted = convert_all_types(analysis)
-    
+        
+        analysis_converted = convert_numpy_types(analysis)
+        
         with open(f"{self.config.RESULT_SAVE_DIR}/{filename}", 'w', encoding='utf-8') as f:
             json.dump(analysis_converted, f, indent=2, ensure_ascii=False)
-    
+        
         print(f"分析报告已保存到: {self.config.RESULT_SAVE_DIR}/{filename}")
-    
-    # 同时生成简要文本报告
+        
+        # 同时生成简要文本报告
         self.generate_text_summary(analysis, filename.replace('.json', '_summary.txt'))
-    
-        return filename
-    
-    # 深度转换所有类型
-        analysis_converted = self._recursive_convert(analysis)
-    
-        with open(f"{self.config.RESULT_SAVE_DIR}/{filename}", 'w', encoding='utf-8') as f:
-            json.dump(analysis_converted, f, indent=2, ensure_ascii=False)
-    
-        print(f"分析报告已保存到: {self.config.RESULT_SAVE_DIR}/{filename}")
-    
-    # 同时生成简要文本报告
-        self.generate_text_summary(analysis, filename.replace('.json', '_summary.txt'))
-    
+        
         return filename
     
     def generate_text_summary(self, analysis: Dict, filename: str):
